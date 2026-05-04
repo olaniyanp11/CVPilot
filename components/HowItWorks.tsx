@@ -1,3 +1,5 @@
+"use client";
+
 import { Upload, FileText, Sparkles, Download, ArrowUpRight } from "lucide-react";
 
 const steps = [

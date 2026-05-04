@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import MotionProvider from "@/components/MotionProvider";
 
 export const metadata: Metadata = {
   title: "CVPilot — AI Resume Optimizer",
@@ -21,7 +20,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="scroll-smooth">
       <body className="bg-cream-100 text-ink antialiased">
-        <MotionProvider>{children}</MotionProvider>
+        {children}
       </body>
     </html>
   );

@@ -1,3 +1,5 @@
+"use client";
+
 const testimonials = [
   {
     stars: 5,
