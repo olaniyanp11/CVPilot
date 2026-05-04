@@ -84,7 +84,7 @@ export default function Loading() {
       {/* Checklist card */}
       <div className="w-full max-w-xs rounded-2xl bg-black/[0.04] p-5 text-left">
         <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-ink/30">
-          What we're doing
+          What we&apos;re doing
         </p>
         <div className="flex flex-col gap-2">
           {TASKS.map((task, i) => {
