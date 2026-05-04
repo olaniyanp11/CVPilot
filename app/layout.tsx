@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import Navbar from "@/components/Navbar";
+import Footer from "@/components/Footer";
 
 export const metadata: Metadata = {
   title: "CVPilot — AI Resume Optimizer",
@@ -20,7 +22,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="scroll-smooth">
       <body className="bg-cream-100 text-ink antialiased">
-        {children}
+        <Navbar />
+        <main className=" min-h-screen">{children}</main>
+        <Footer />
       </body>
     </html>
   );

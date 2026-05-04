@@ -6,9 +6,9 @@ import { Menu, X } from "lucide-react";
 import clsx from "clsx";
 
 const links = [
-  { href: "#features", label: "Features" },
-  { href: "#how", label: "How it works" },
-  { href: "#pricing", label: "Pricing" },
+  { href: "/#features", label: "Features" },
+  { href: "/#how", label: "How it works" },
+  { href: "/#pricing", label: "Pricing" },
 ];
 
 export default function Navbar() {

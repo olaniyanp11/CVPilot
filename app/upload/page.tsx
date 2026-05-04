@@ -6,7 +6,7 @@ export const metadata = {
 
 export default function UploadPage() {
   return (
-    <main className="min-h-[calc(100vh-0px)] bg-cream-100 px-4 py-10">
+    <main className="min-h-[calc(100vh-0px)] bg-cream-100 px-4 py-10 pt-28">
       <ResumeUpload />
     </main>
   );

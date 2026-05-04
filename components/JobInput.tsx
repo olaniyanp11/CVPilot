@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import AnalyzingModal from "./AnalyzingModal";
 
 export default function JobInput({
   initialValue = "",
@@ -19,7 +20,8 @@ export default function JobInput({
         Paste the job description
       </h1>
       <p className="mt-1 text-sm text-ink/70">
-        We’ll score your resume, identify missing keywords, and generate an ATS-friendly rewrite.
+        We’ll score your resume, identify missing keywords, and generate an
+        ATS-friendly rewrite.
       </p>
 
       <div className="mt-5 space-y-3">
@@ -43,6 +45,7 @@ export default function JobInput({
           {isSubmitting ? "Analyzing…" : "Analyze resume"}
         </button>
       </div>
+      <AnalyzingModal open={!!isSubmitting} />
     </div>
   );
 }

@@ -76,9 +76,9 @@ export default function AnalyzeClient() {
         onSubmit={onSubmit}
         isSubmitting={isSubmitting}
       />
-      <p className="text-xs text-ink/60">
+      {/* <p className="text-xs text-ink/60">
         Your resume text is stored in this browser session only.
-      </p>
+      </p> */}
     </div>
   );
 }
