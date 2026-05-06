@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { ResumeAnalysis } from "@/types/analysis";
+import { HfInference } from "@huggingface/inference";
 
 function requireGeminiApiKey(): string {
   const key = process.env.GEMINI_API_KEY;
@@ -9,86 +10,205 @@ function requireGeminiApiKey(): string {
 
 const genAI = new GoogleGenerativeAI(requireGeminiApiKey());
 
+// async function generateWithResilience(
+//   prompt: string,
+//   options: { temperature?: number; maxOutputTokens?: number } = {},
+// ): Promise<string> {
+//   const { temperature = 0.2, maxOutputTokens = 6000 } = options;
+//   const models = ["gemini-2.5-flash", "gemini-2.5-pro"];
+
+//   for (const modelName of models) {
+//     console.log(`[Gemini] Trying model: ${modelName}`);
+
+//     const model = genAI.getGenerativeModel({
+//       model: modelName,
+//       generationConfig: { temperature, maxOutputTokens, topP: 0.9 },
+//     });
+
+//     for (let attempt = 0; attempt < 4; attempt++) {
+//       console.log(`[Gemini] ${modelName} — attempt ${attempt + 1}/4`);
+
+//       try {
+//         const result = await model.generateContent(prompt);
+//         const text = result.response.text()?.trim();
+
+//         console.log(
+//           `[Gemini] ${modelName} attempt ${attempt + 1} — response length: ${text?.length ?? 0}`,
+//         );
+
+//         if (text && text.length > 100) return text;
+
+//         // Got a response but it's too short — log it so we can see what came back
+//         console.warn(
+//           `[Gemini] ${modelName} attempt ${attempt + 1} — response too short or empty:`,
+//           JSON.stringify(text),
+//         );
+//       } catch (err: any) {
+//         const msg = err.message?.toLowerCase() ?? "";
+//         const status =
+//           err.status ??
+//           err.statusCode ??
+//           err?.errorDetails?.[0]?.reason ??
+//           "unknown";
+
+//         console.error(
+//           `[Gemini] ${modelName} attempt ${attempt + 1} FAILED`,
+//           JSON.stringify({
+//             status,
+//             message: err.message,
+//             errorDetails: err.errorDetails ?? null,
+//             httpStatus: err.httpError?.statusCode ?? null,
+//           }),
+//         );
+
+//         if (msg.includes("503") || msg.includes("overloaded")) {
+//           const delay = 1500 * (attempt + 1);
+//           console.log(`[Gemini] 503/overloaded — retrying in ${delay}ms`);
+//           await new Promise((r) => setTimeout(r, delay));
+//           continue;
+//         }
+
+//         if (msg.includes("429")) {
+//           console.warn(
+//             `[Gemini] 429 rate limit hit on ${modelName} — skipping to next model`,
+//           );
+//           break;
+//         }
+
+//         // Any other error (401, 400, network failure, etc.) — log and break
+//         // Previously these were silently swallowed; now we surface them
+//         console.error(
+//           `[Gemini] Unhandled error type on ${modelName} — skipping to next model`,
+//         );
+//         break;
+//       }
+//     }
+
+//     console.log(`[Gemini] Exhausted all attempts for model: ${modelName}`);
+//   }
+
+//   throw new Error("Gemini generation failed after retries");
+// }
+
+function requireHfApiKey(): string {
+  const key = process.env.HUGGINGFACE_API_KEY;
+  if (!key) throw new Error("Missing HUGGINGFACE_API_KEY in .env.local");
+  return key;
+}
+
+const hf = new HfInference(requireHfApiKey());
+
 async function generateWithResilience(
   prompt: string,
+  systemMessage: string,
   options: { temperature?: number; maxOutputTokens?: number } = {},
 ): Promise<string> {
-  const { temperature = 0.2, maxOutputTokens = 6000 } = options;
-  const models = ["gemini-2.5-flash", "gemini-2.5-pro"];
+  const { temperature = 0.1, maxOutputTokens = 3000 } = options;
+
+  // Prioritizing models with high availability and strong instruction-following
+  const models = [
+    "deepseek-ai/DeepSeek-V4-Pro",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "mistralai/Mistral-Nemo-Instruct-2407",
+    "meta-llama/Llama-3.1-70B-Instruct",
+  ];
+
+  // Verify API Key exists before starting
+  if (!process.env.HUGGINGFACE_API_KEY) {
+    throw new Error(
+      "HUGGINGFACE_API_KEY is missing from environment variables.",
+    );
+  }
 
   for (const modelName of models) {
-    console.log(`[Gemini] Trying model: ${modelName}`);
+    console.log(`[HuggingFace] Targeting: ${modelName}`);
 
-    const model = genAI.getGenerativeModel({
-      model: modelName,
-      generationConfig: { temperature, maxOutputTokens, topP: 0.9 },
-    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      console.log(`[HuggingFace] ${modelName} — Attempt ${attempt + 1}/3`);
 
-    for (let attempt = 0; attempt < 4; attempt++) {
-      console.log(`[Gemini] ${modelName} — attempt ${attempt + 1}/4`);
+      // Create a long timeout (120s) for local network stability
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
 
       try {
-        const result = await model.generateContent(prompt);
-        const text = result.response.text()?.trim();
+        const response = await hf.chatCompletion(
+          {
+            model: modelName,
+            messages: [
+              { role: "system", content: systemMessage },
+              { role: "user", content: prompt },
+            ],
+            max_tokens: maxOutputTokens,
+            temperature: temperature,
+          },
+          {
+            // Use custom fetch to attach the timeout signal
+            fetch: (url, fetchOptions) =>
+              fetch(url, { ...fetchOptions, signal: controller.signal }),
 
-        console.log(
-          `[Gemini] ${modelName} attempt ${attempt + 1} — response length: ${text?.length ?? 0}`,
+            // CRITICAL: Tells Hugging Face to wait if the model is currently loading
+            // wait_for_model: true,
+          },
         );
 
-        if (text && text.length > 100) return text;
+        clearTimeout(timeoutId);
 
-        // Got a response but it's too short — log it so we can see what came back
+        const text = response.choices[0].message.content?.trim();
+
+        // Basic validation of the response
+        if (text && text.length > 100) {
+          console.log(`[HuggingFace] Success with ${modelName}`);
+          return text;
+        }
+
         console.warn(
-          `[Gemini] ${modelName} attempt ${attempt + 1} — response too short or empty:`,
-          JSON.stringify(text),
+          `[HuggingFace] ${modelName} returned a suspiciously short response.`,
         );
       } catch (err: any) {
-        const msg = err.message?.toLowerCase() ?? "";
-        const status =
-          err.status ??
-          err.statusCode ??
-          err?.errorDetails?.[0]?.reason ??
-          "unknown";
+        clearTimeout(timeoutId);
 
-        console.error(
-          `[Gemini] ${modelName} attempt ${attempt + 1} FAILED`,
-          JSON.stringify({
-            status,
-            message: err.message,
-            errorDetails: err.errorDetails ?? null,
-            httpStatus: err.httpError?.statusCode ?? null,
-          }),
-        );
+        // Detailed error logging for your local debugging
+        const errName = err.name || "UnknownError";
+        const errMsg = err.message?.toLowerCase() ?? "";
 
-        if (msg.includes("503") || msg.includes("overloaded")) {
-          const delay = 1500 * (attempt + 1);
-          console.log(`[Gemini] 503/overloaded — retrying in ${delay}ms`);
-          await new Promise((r) => setTimeout(r, delay));
-          continue;
-        }
+        console.error(`[DEBUG] Error Name: ${errName}`);
+        console.error(`[DEBUG] Error Message: ${err.message}`);
 
-        if (msg.includes("429")) {
-          console.warn(
-            `[Gemini] 429 rate limit hit on ${modelName} — skipping to next model`,
+        if (errName === "AbortError") {
+          console.error(
+            `[HuggingFace] Timeout: Model ${modelName} took too long.`,
           );
-          break;
+          break; // Move to the next model
         }
 
-        // Any other error (401, 400, network failure, etc.) — log and break
-        // Previously these were silently swallowed; now we surface them
+        // Handle specific API responses
+        if (errMsg.includes("loading") || errMsg.includes("503")) {
+          const backoff = 5000 * (attempt + 1);
+          console.log(
+            `[HuggingFace] Model is busy/loading. Waiting ${backoff}ms...`,
+          );
+          await new Promise((r) => setTimeout(r, backoff));
+          continue; // Retry the same model
+        }
+
+        if (errMsg.includes("429") || errMsg.includes("rate limit")) {
+          console.warn(`[HuggingFace] Rate limited on ${modelName}.`);
+          break; // Move to the next model
+        }
+
+        // Generic fetch failure - likely local network or SSL
         console.error(
-          `[Gemini] Unhandled error type on ${modelName} — skipping to next model`,
+          `[HuggingFace] Fetch failed on ${modelName}. Switching models...`,
         );
         break;
       }
     }
-
-    console.log(`[Gemini] Exhausted all attempts for model: ${modelName}`);
   }
 
-  throw new Error("Gemini generation failed after retries");
+  throw new Error(
+    "All models failed. Check your API key, local DNS settings, or .env.local file.",
+  );
 }
-
 /* ====================== SAFE JSON PARSER ====================== */
 function safeJsonParse<T>(raw: string): T {
   let cleaned = raw
@@ -107,41 +227,28 @@ function safeJsonParse<T>(raw: string): T {
     return JSON.parse(cleaned) as T;
   } catch (err) {
     console.error(
-      "[Gemini] safeJsonParse failed. Raw text was:",
+      "[Parser] safeJsonParse failed. Raw text was:",
       raw.slice(0, 500),
     );
     throw err;
   }
 }
 
-/* ====================== ANALYZE RESUME ====================== */
+/* ====================== ANALYZE RESUME (JSON Output) ====================== */
+
 export async function analyzeResume(
   resumeText: string,
   jobDescription: string,
   scoring: { matchScore: number; missingKeywords: string[] },
 ): Promise<ResumeAnalysis> {
-  console.log(
-    "[analyzeResume] Starting — resume length:",
-    resumeText.length,
-    "JD length:",
-    jobDescription.length,
-  );
-
   const prompt = [
-    "You are a strict ATS resume reviewer.",
-    "Return ONLY valid JSON. No markdown, no backticks, no explanations.",
-    "",
     "CRITICAL RULES:",
     "- Weaknesses MUST be specific to THIS resume vs THIS job description.",
-    "- Do NOT use generic phrases like 'lacks quantifiable achievements' unless truly absent.",
-    "- Each weakness must reference a concrete gap (e.g. 'Resume mentions no testing frameworks; job requires Jest, Cypress, and Playwright').",
-    "- Each strength must reference a concrete match (e.g. 'Next.js experience matches job requirement for Next.js testing').",
+    "- Each weakness must reference a concrete gap (e.g. 'Resume mentions no testing frameworks').",
     "- Strengths: exactly 4-6 items.",
     "- Weaknesses: exactly 5-7 items.",
-    "- Use the exact provided matchScore and missingKeywords — do not change them.",
-    "",
-    `Provided matchScore: ${scoring.matchScore}`,
-    `Provided missingKeywords: ${JSON.stringify(scoring.missingKeywords)}`,
+    `- matchScore: ${scoring.matchScore}`,
+    `- missingKeywords: ${JSON.stringify(scoring.missingKeywords)}`,
     "",
     "Return this exact JSON shape:",
     '{ "matchScore": number, "missingKeywords": string[], "strengths": string[], "weaknesses": string[] }',
@@ -153,40 +260,26 @@ export async function analyzeResume(
     jobDescription,
   ].join("\n");
 
-  console.log(
-    "[analyzeResume] Prompt token estimate:",
-    Math.round(prompt.length / 4),
-  );
+  const systemRole =
+    "You are a precise ATS resume reviewer. Return ONLY valid JSON. No conversational filler.";
 
-  const text = await generateWithResilience(prompt, { temperature: 0.1 });
+  const text = await generateWithResilience(prompt, systemRole, {
+    temperature: 0.1,
+  });
   const parsed = safeJsonParse<Partial<ResumeAnalysis>>(text);
-
-  const strengths =
-    Array.isArray(parsed.strengths) && parsed.strengths.length >= 2
-      ? parsed.strengths.slice(0, 7)
-      : deriveStrengthsFallback(resumeText, jobDescription);
-
-  const weaknesses =
-    Array.isArray(parsed.weaknesses) && parsed.weaknesses.length >= 3
-      ? parsed.weaknesses.slice(0, 7)
-      : deriveWeaknessesFallback(
-          resumeText,
-          jobDescription,
-          scoring.missingKeywords,
-        );
-
-  console.log(
-    "[analyzeResume] Done — strengths:",
-    strengths.length,
-    "weaknesses:",
-    weaknesses.length,
-  );
 
   return {
     matchScore: scoring.matchScore,
     missingKeywords: scoring.missingKeywords,
-    strengths,
-    weaknesses,
+    strengths:
+      parsed.strengths || deriveStrengthsFallback(resumeText, jobDescription),
+    weaknesses:
+      parsed.weaknesses ||
+      deriveWeaknessesFallback(
+        resumeText,
+        jobDescription,
+        scoring.missingKeywords,
+      ),
   };
 }
 
@@ -316,55 +409,37 @@ export async function optimizeResume(
   jobDescription: string,
   missingKeywords: string[],
 ): Promise<string> {
-  console.log(
-    "[optimizeResume] Starting — resume length:",
-    resumeText.length,
-    "missing keywords:",
-    missingKeywords.length,
-  );
-
   const prompt = [
-    "You are an expert ATS resume optimizer.",
-    "Rewrite the resume below to maximally align with the job description while staying 100% truthful.",
-    "",
-    "MANDATORY INSTRUCTIONS:",
-    "- Rewrite EVERY bullet point to be stronger, more specific, and keyword-rich.",
-    "- Rewrite the Professional Summary to be tailored to this exact job.",
-    "- Naturally incorporate the missing keywords listed below where they genuinely apply.",
-    "- Use strong action verbs (Engineered, Implemented, Optimized, Delivered, etc.).",
-    "- Do NOT invent new jobs, companies, dates, or achievements that don't exist in the original.",
-    "- Keep all existing roles, education, and projects — just rewrite the descriptions.",
-    "- Output ONLY the full rewritten resume as plain text. No explanations, no markdown, no headers like 'Here is the rewritten resume'.",
-    "",
-    `Missing keywords to weave in naturally: ${missingKeywords.join(", ")}`,
+    "Rewrite the following resume to align with the provided Job Description.",
+    "Ensure you weave in these missing keywords naturally: " +
+      missingKeywords.join(", "),
     "",
     "=== JOB DESCRIPTION ===",
     jobDescription,
     "",
-    "=== ORIGINAL RESUME (rewrite this) ===",
+    "=== ORIGINAL RESUME ===",
     resumeText,
   ].join("\n");
 
-  console.log(
-    "[optimizeResume] Prompt token estimate:",
-    Math.round(prompt.length / 4),
-  );
+  /**
+   * Refined System Role:
+   * This tells the model exactly how to structure the document for a PDF.
+   */
+  const systemRole = `
+    You are a professional Resume Architect. 
+    Format the resume using clean Markdown:
+    1. Use # for the Name.
+    2. Use ## for Section Headers (Experience, Education, etc.).
+    3. Use bold **Company Name** and *Job Title*.
+    4. Use bullet points (-) for responsibilities.
+    5. Do NOT include any introductory text like "Here is the optimized resume."
+    6. Return ONLY the resume content.
+  `.trim();
 
-  const text = await generateWithResilience(prompt, {
+  const text = await generateWithResilience(prompt, systemRole, {
     temperature: 0.3,
-    maxOutputTokens: 7000,
+    maxOutputTokens: 6000,
   });
 
-  const result = text.trim();
-
-  if (result === resumeText.trim()) {
-    console.warn(
-      "[optimizeResume] WARNING: Model returned text identical to input. " +
-        "The resume may not have been rewritten. Check your Gemini quota and prompt.",
-    );
-  }
-
-  console.log("[optimizeResume] Done — output length:", result.length);
-
-  return result;
+  return text.trim();
 }
